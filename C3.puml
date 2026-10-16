@@ -1,5 +1,5 @@
 @startuml Component_Diagram_Final
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+!include <C4/C4_Component>
 
 ' ### СИСТЕМНЫЕ ГРАНИЦЫ ###
 System_Boundary(monolith_boundary, "GoFuture Monolith") {
