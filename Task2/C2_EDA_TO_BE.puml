@@ -1,0 +1,83 @@
+@startuml Container_Diagram_EDA_With_Monolith
+!include <C4/C4_Container>
+
+UpdateElementStyle("to_be", $bgColor="lightgreen", $fontColor="black", $borderColor="green")
+UpdateElementStyle("to_be2", $bgColor="orange", $fontColor="black", $borderColor="red")
+
+' ### СЛОЙ ПОЛЬЗОВАТЕЛЕЙ И ИНТЕРФЕЙСОВ (АБСТРАКЦИЯ) ###
+System_Ext(users_group, "Пользователи", "Пассажиры, Водители, Партнёры, Сотрудники")
+Container(user_interfaces, "Интерфейсы пользователей (UI)", "Mobile Apps / Web", "Клиентские интерфейсы")
+Person(sre_engineer, "SRE инженер / Архитектор", "Мониторит здоровье и лаги распределенной системы")
+
+System_Boundary(go_future_system, "GoFuture Platform (Target EDA Architecture)") {
+
+    ' ### ЕДИНАЯ ТОЧКА ВХОДА С ВШИТЫМ ТРЕЙСИНГОМ ###
+    Container(api_gateway, "API Gateway & ACL Layer", "Envoy Gateway", "Входная точка. Маршрутизация, Rate Limiting, **генерация сквозного Trace ID**", $tags="to_be")
+
+    ' ### ТЕКУЩИЙ ЛЕГАСИ-КОНТУР (ВЕРНУЛ) ###
+    Container(app_monolith, "GoFuture Monolith (Legacy)", "Django Application", "Остаточная бизнес-логика. Поддерживает старые ручки, принимает Trace ID, пишет легаси-события в Kafka")
+    ContainerQueue(mq_broker, "Message Broker (RabbitMQ)", "RabbitMQ", "Легаси-очередь для фоновых задач Celery старого монолита")
+    Container(app_worker, "Воркеры Celery", "Celery Workers", "Обработка асинхронных задач легаси-контура")
+
+    ' ### ИЗОЛИРОВАННЫЕ МИКРОСЕРВИСЫ (АБСТРАКЦИЯ ЯДРА) ###
+    Container(core_services, "Изолированные микросервисы", "Booking, Driver, Payments, etc)", "Новые сервисы. Синхронно общаются по gRPC. **Публикуют доменные события с Trace ID в заголовках**", $tags="to_be")
+
+    ' ### ЦЕНТРАЛЬНАЯ СОБЫТИЙНАЯ ШИНА ###
+    ContainerQueue(kafka_broker, "Событийная шина (Apache Kafka Cluster)", "Партиционирование по регионам", "Хранилище доменных событий (BookingCreated, DriverLocationUpdated, и пр.)", $tags="to_be")
+
+    ' ### ПОТРЕБИТЕЛИ СОБЫТИЙ И РЕАЛТАЙМ ВЫЧИСЛЕНИЯ ###
+    Container(stream_processors, "Стриминговые процессоры (Event Consumers)", "Apache Flink / KStreams", "Реалтайм процессинг: расчет коэффициентов спроса (Pricing) и ML-антифрод (Fraud)", $tags="to_be")
+
+    Container(notification_services, "Сервисы нотификаций и побочных эффектов", "Notification, Analytics Ingestion", "Слушают Kafka-топики, отправляют новые push-уведомления, стримят данные в ClickHouse", $tags="to_be")
+
+    ' ### СПЕЦИАЛИЗИРОВАННЫЙ КОНТУР EDA-МОНИТОРИНГА ###
+    Container(kafka_exporter, "Kafka Exporter / Cruise Control", "Prometheus Exporter", "Снимает метрики лага консьюмеров по топикам и регионам", $tags="to_be2")
+
+    Container(jaeger_tracing, "Система трассировки", "Jaeger / OpenTelemetry", "Собирает и склеивает асинхронные спаны (включая прохождение запроса через Монолит, Kafka и новые сервисы)", $tags="to_be2")
+
+    Container(monitoring_system, "Метрики и Алертинг", "Prometheus & Alertmanager", "Централизованный сбор метрик производительности и **EDA-метрик**")
+    Container(grafana, "Панели визуализации", "Grafana", "Единый дашборд для SRE: в т.ч. графики очередей, задержки окон и схемы трассировки")
+}
+
+' ### СВЯЗИ ОСНОВНОГО БИЗНЕС-ПОТОКА И ТРАССИРОВКИ ###
+Rel(users_group, user_interfaces, "Используют приложения")
+Rel(user_interfaces, api_gateway, "HTTP/REST запросы")
+
+' API GW создает Trace ID и разделяет трафик
+Rel(api_gateway, app_monolith, "Перенаправляет легаси-запросы (Вшивает Trace ID)")
+Rel(api_gateway, core_services, "Перенаправляет новые gRPC/REST запросы (Вшивает Trace ID)")
+Rel(api_gateway, jaeger_tracing, "Отправляет Span: Gateway Request", "gRPC")
+
+' Монолит работает со своими воркерами, но шлет события в общую Кафку
+Rel(app_monolith, mq_broker, "Фоновые задачи монолита", "AMQP")
+Rel(mq_broker, app_worker, "Забирает задачи", "AMQP")
+Rel(app_monolith, kafka_broker, "Публикует легаси бизнес-события (Producer)", "Kafka Protocol")
+Rel(app_monolith, jaeger_tracing, "Отправляет Span: Legacy Monolith Process", "gRPC")
+
+' Новые микросервисы пишут в Кафку
+Rel(core_services, kafka_broker, "Публикуют доменные события (Producer)", "Kafka Protocol")
+Rel(core_services, jaeger_tracing, "Отправляет Span: Core Service Produce", "gRPC")
+
+' Flink и KStreams читают из Кафки и пишут обратно
+Rel(kafka_broker, stream_processors, "Стриминг событий (Consumer)", "Kafka Protocol")
+Rel(stream_processors, kafka_broker, "Публикуют результаты вычислений", "Kafka Protocol")
+Rel(stream_processors, jaeger_tracing, "Отправляет Span: Flink Window Processing", "gRPC")
+
+' Сервисы уведомлений завершают цепочку
+Rel(kafka_broker, notification_services, "Читают события из топиков (Consumer)", "Kafka Protocol")
+Rel(notification_services, jaeger_tracing, "Отправляет Span: Notification Sent", "gRPC")
+
+' ### СВЯЗИ СЪЁМА МЕТРИК EDA ###
+Rel(kafka_broker, kafka_exporter, "Опрашивает состояние оффсетов")
+Rel(kafka_exporter, monitoring_system, "Передает метрики лага (Consumer Lag)", "Prometheus Pull")
+Rel(stream_processors, monitoring_system, "Передают метрики стриминга (Watermarks, Backpressure)", "Prometheus Pull")
+Rel(app_monolith, monitoring_system, "Передает стандартные метрики Django (RPS, Errors)", "Prometheus Pull")
+Rel(core_services, monitoring_system, "Передают метрики приложений (gRPC Latency)", "Prometheus Pull")
+
+' ### СВЯЗИ ВИЗУАЛИЗАЦИИ И АЛЕРТИНГА ###
+Rel(monitoring_system, grafana, "Поставляет метрики", "PromQL")
+Rel(jaeger_tracing, grafana, "Поставляет графы распределенных трасс", "Jaeger API")
+Rel(monitoring_system, sre_engineer, "Триггерит алерты при росте лага очереди", "Slack/PagerDuty")
+Rel(sre_engineer, grafana, "Анализирует состояние платформы")
+
+@enduml
