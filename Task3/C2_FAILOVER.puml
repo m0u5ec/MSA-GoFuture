@@ -1,0 +1,54 @@
+@startuml Container_Diagram_Failover_And_Success
+!include <C4/C4_Container>
+
+' Настройки стилей
+UpdateElementStyle("to_be", $bgColor="lightgreen", $fontColor="black", $borderColor="green")
+AddElementTag("failover_core", $bgColor="#FF4D4D", $fontColor="white", $borderColor="#B30000")
+AddElementTag("dead_region", $bgColor="#E0E0E0", $fontColor="#909090", $borderColor="#A0A0A0")
+
+Person(passenger_asia, "Пассажир в ЮВА (Сингапур)", "Штатный режим")
+Person(passenger_latam, "Пассажир в ЛатАм (Бразилия)", "Попал под аварию")
+
+System_Boundary(dns_control_boundary, "Глобальный контур маршрутизации и мониторинга") {
+    ' КРАСНЫЙ КОМПОНЕНТ: ОПРЕДЕЛЯЕТ КУДА ШЛАТЬ ТРАФИК
+    Container(geo_dns, "GeoDNS & Health Checker", "Route 53 / Yandex DNS", "Каждые 10 сек опрашивает /health регионов. Видит, что Регион Б упал, а Регион А и В — живы!", $tags="failover_core")
+}
+
+' ### РЕГИОН А (РАБОТАЕТ — РЕЗЕРВНЫЙ ДЛЯ АВАРИЙНОГО ТРАФИКА) ###
+System_Boundary(region_a, "РЕГИОН А (Центральный — РАБОТАЕТ)") {
+    Container(api_gateway_a, "API Gateway Региона А", "Envoy", "Принимает свой трафик + аварийный трафик из ЛатАм", $tags="to_be")
+    Container(services_a, "Микросервисы Региона А", "Go/Python", "Обрабатывают запросы", $tags="to_be")
+    ContainerDb(db_a, "Региональная БД А", "PostgreSQL", "Локальные данные + копия IAM")
+}
+
+' ### РЕГИОН Б (УПАЛ — АВАРИЙНЫЙ) ###
+System_Boundary(region_b, "РЕГИОН Б (ЛатАм — АВАРИЯ / ЦОД DOWN)") {
+    Container(api_gateway_b, "API Gateway Региона Б", "Envoy", "НЕДОСТУПЕН (Отказ питания)", $tags="dead_region")
+    Container(services_b, "Микросервисы Региона Б", "Go/Python", "ОБЕСТОЧЕНЫ", $tags="dead_region")
+}
+
+' ### РЕГИОН В (РАБОТАЕТ — ШТАТНЫЙ ПОТОК SUCCESS) ###
+System_Boundary(region_c, "РЕГИОН В (ЮВА / Сингапур — РАБОТАЕТ)") {
+    Container(api_gateway_c, "API Gateway Региона В", "Envoy", "Штатная работа", $tags="to_be")
+    Container(services_c, "Микросервисы Региона В", "Go/Python", "Обрабатывают запросы ЮВА", $tags="to_be")
+    ContainerDb(db_c, "Региональная БД В", "PostgreSQL", "Локальные данные ЮВА")
+}
+
+' ### 1. КОНТУР HEALTH CHECK (МОНИТОРИНГ) ###
+Rel(geo_dns, api_gateway_a, "Health Check: GET /health", "HTTPS (Ответ: 200 OK)")
+Rel(geo_dns, api_gateway_c, "Health Check: GET /health", "HTTPS (Ответ: 200 OK)")
+Rel(geo_dns, api_gateway_b, "Health Check: GET /health", "HTTPS (ОШИБКА / ТАЙМАУТ)", $tags="failover_core")
+
+' ### 2. ШТАТНЫЙ ПОТОК ДАННЫХ (SUCCESS PATH — ЮВА) ###
+Rel(passenger_asia, geo_dns, "1. Где API?")
+Rel(geo_dns, passenger_asia, "2. Ты в Сингапуре, Регион В здоров. Вот его IP")
+Rel(passenger_asia, api_gateway_c, "3. [SUCCESS] Заказ такси напрямую в свой регион", "HTTPS / Latency 40ms")
+Rel(api_gateway_c, services_c, "gRPC")
+
+' ### 3. АВАРИЙНЫЙ ПОТОК ДАННЫХ (FAILOVER PATH — ЛАТАМ) ###
+Rel(passenger_latam, geo_dns, "1. Где API?", $tags="failover_core")
+Rel(geo_dns, passenger_latam, "2. Регион Б мертв! Трафик перенаправлен на Регион А", $tags="failover_core")
+Rel(passenger_latam, api_gateway_a, "3. [FAILOVER] Заказ такси уходит в резервный регион", "HTTPS / Latency 180ms", $tags="failover_core")
+Rel(api_gateway_a, services_a, "gRPC")
+
+@enduml
