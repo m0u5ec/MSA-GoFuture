@@ -1,0 +1,59 @@
+@startuml Container_Diagram_ML_Analytics_Pipeline
+!include <C4/C4_Container>
+
+' Настройка стилей: существующий событийный контур (зеленый), новые ML и Data Quality компоненты (красный)
+UpdateElementStyle("to_be", $bgColor="lightgreen", $fontColor="black", $borderColor="green")
+AddElementTag("ml_analytics", $bgColor="#FF4D4D", $fontColor="white", $borderColor="#B30000")
+
+' Роли пользователей аналитики
+Person(data_scientist, "Data Scientist / ML Engineer", "Обучает модели, настраивает пайплайны")
+Person(business_analyst, "Бизнес-аналитик / Менеджер", "Анализирует отчеты и графики спроса")
+
+System_Boundary(go_future_analytics, "GoFuture Analytics & ML Platform") {
+
+    ' ### ИСТОЧНИКИ ДАННЫХ (PRODUCERS) И ШИНА###
+    Container(core_services, "Изолированные микросервисы ядра", "Booking, Driver, Payments etc.", "Генерируют реалтайм бизнес-события", $tags="to_be")
+    ContainerQueue(kafka_broker, "Событийная шина", "Apache Kafka", "Транспорт для доменных событий", $tags="to_be")
+
+    ' ### КОНТРОЛЬ КАЧЕСТВА ДАННЫХ ###
+    Container(schema_registry, "Confluent Schema Registry / Валидатор", "Data Quality Layer", "Проверяет структуру событий на соответствие контрактам. Блокирует битые данные (пишет в DLQ).", $tags="ml_analytics")
+
+    ' ### СТРИМИНГОВАЯ И ПАКЕТНАЯ ОБРАБОТКА###
+    Container(analytics_engine, "Analytics Engine (Spark / Flink)", "Data Processing", "Реалтайм агрегация окон, очистка данных, расчет показателей для ML и ETL-стриминг в ClickHouse", $tags="to_be")
+
+    ' ### ML-ПЛАТФОРМА ###
+    System_Boundary(ml_platform_boundary, "ML-платформа GoFuture") {
+        Container(feature_store, "Feature Store", "ML Data Storage (Redis)", "Хранилище реалтайм показателей (текущий спрос в геозоне и т.п.) для расчетов на лету", $tags="ml_analytics")
+        Container(ml_models, "ML Engine", "Triton / FastAPI", "Запуск моделей в реальном времени: скоринг антифрода, расчет коэффициентов стоимости", $tags="ml_analytics")
+        Container(mlflow_registry, "MLflow Model Registry & Пайплайны", "MLOps", "Обучение моделей по расписанию, мониторинг деградации моделей", $tags="ml_analytics")
+    }
+
+    ' ### ХРАНИЛИЩА И BI (ПОТРЕБИТЕЛИ) ###
+    ContainerDb(analytics_db, "Analytics DB", "ClickHouse Cluster", "Хранение исторических данных, витрин и агрегатов для BI", $tags="to_be")
+    Container(datalens, "BI Tool", "DataLens", "Отображение бизнес-метрик, графиков спроса, эффективности водителей", $tags="to_be")
+}
+
+' ### ПОТОКИ ДАННЫХ ПАЙПЛАЙНА ###
+Rel(core_services, kafka_broker, "1. Публикуют сырые события")
+Rel(kafka_broker, schema_registry, "2. Валидация схемы данных")
+Rel( schema_registry,kafka_broker, "2.1 Запись невалидных данных в DLQ")
+
+' Поток в обработчик
+Rel(kafka_broker, analytics_engine, "3. Вычитка валидных событий", "Kafka Consumer")
+Rel(analytics_engine, analytics_db, "4. Запись исторических агрегатов (ETL)", "ClickHouse Native Client")
+
+' ### ПОТОКИ ML-ПЛАТФОРМЫ (РЕАЛТАЙМ И ОБУЧЕНИЕ) ###
+Rel(analytics_engine, feature_store, "5. Стриминг реалтайм показателей (Агрегаты за 5-15 мин)", "gRPC / Write")
+Rel(analytics_db, mlflow_registry, "6. Выгрузка исторических датасетов для обучения (Батчи за длительные промежутки)", "SQL Queries")
+Rel(mlflow_registry, ml_models, "7. Деплой обученных ML-моделей")
+
+' Применение моделей в бою
+Rel(core_services, ml_models, "8. Запрос расчетов на лету (Коэффициенты цен / Антифрод скоринг)", "gRPC / Latency < 50ms")
+Rel(ml_models, feature_store, "9. Дообогащение запроса реалтайм-данными")
+
+' ### КОНТУР ВИЗУАЛИЗАЦИИ И ПОЛЬЗОВАТЕЛЕЙ ###
+Rel(analytics_db, datalens, "Предоставляет данные для витрин", "SQL")
+Rel(data_scientist, mlflow_registry, "Управляет обучением и пайплайнами")
+Rel(business_analyst, datalens, "Анализирует дашборды")
+
+@enduml
