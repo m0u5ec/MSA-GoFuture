@@ -1,0 +1,59 @@
+@startuml Container_Diagram_Multi_Tenancy_Final_Fixed
+!include <C4/C4_Container>
+
+' Стили
+UpdateElementStyle("to_be", $bgColor="lightgreen", $fontColor="black", $borderColor="green")
+AddElementTag("multi_tenancy", $bgColor="#FF4D4D", $fontColor="white", $borderColor="#B30000")
+
+Person(partner_admin, "Партнёр", "Регистрирует компанию, управляет настройками, пользуется изолированной системой")
+Person(platform_operator, "Оператор GoFuture (SRE / FinOps)", "Контролирует утилизацию ресурсов, лимиты и счета")
+
+System_Boundary(multitenant_platform, "Мультитенантная среда GoFuture") {
+
+    ' ### АВТОМАТИЗАЦИЯ ОНБОРДИНГА ###
+    Container(partner_portal, "Портал Партнёра", "React / Python", "Интерфейс самообслуживания", $tags="multi_tenancy")
+    Container(onboarding_orchestrator, "Оркестратор подключения", "Go / Сценарии автоматизации", "Автоматически раскатывает изолированное окружение для нового партнера", $tags="multi_tenancy")
+
+    ' ### УПРАВЛЕНИЕ ДОСТУПОМ ###
+    Container(srv_iam, "User Management & IAM (SSO)", "Go / Keycloak", "Выдает JWT-токены с Tenant_ID и ролями", $tags="to_be")
+
+    ' ### API ШЛЮЗ С КОНТРОЛЕМ КВОТ ###
+    Container(api_gateway, "Мультитенантный API Gateway", "Envoy / Слой лимитов", "Считывает Tenant_ID из токена, применяет лимиты (RPS, Размер запроса)", $tags="to_be")
+
+    ' ### ИЗОЛИРОВАННЫЙ СЛОЙ ВЫЧИСЛЕНИЙ, СЕТИ И ДАННЫХ ###
+    System_Boundary(shared_core, "Общее микросервисное ядро (Pool)") {
+        Container(core_services, "Микросервисы ядра", "Go / Python", "Обрабатывают бизнес-логику такси", $tags="to_be")
+    }
+
+    Container(k8s_namespaces, "Изолированные пространства имён", "K8s Namespaces", "Ограничение выделенных ресурсов (CPU / RAM) для каждого пространства", $tags="multi_tenancy")
+    ContainerDb(db_tenant_a, "Изолированные БД партнёров", "PostgreSQL", "Изолированные БД/схемы, ограничение дискового пространства под данные партнера", $tags="multi_tenancy")
+    ContainerQueue(kafka_broker, "Событийная шина", "Apache Kafka", "Выделенные топики для партнера с ограничением на размер лога", $tags="to_be")
+
+    ' ### МУЛЬТИТЕНАНТНЫЙ МОНИТОРИНГ ###
+    Container(monitoring_system, "Мультитенантный Prometheus", "Метрики по Tenant_ID", "Собирает метрики утилизации ресурсов и RPS в разрезе тенантов", $tags="multi_tenancy")
+    Container(grafana, "Мультитенантная Grafana", "Панели по партнерам", "Показывает графики: операторам — Лимиты и утилизацию партнеров, партнерам — только их мониторинг", $tags="multi_tenancy")
+}
+
+' ### ONBOARDING ###
+Rel(partner_admin, partner_portal, "1. Регистрирует компанию и выбирает тариф (лимиты RPS, CPU, Диск)")
+Rel(partner_portal, onboarding_orchestrator, "2. Запускает сценарий автоматизации")
+Rel(onboarding_orchestrator, srv_iam, "3. Создает изолированный контур (Realm) и роли для партнера")
+
+' Инфраструктурный онбординг (Разворачивание контура)
+Rel(onboarding_orchestrator, k8s_namespaces, "4.1 Создает Namespace с жесткими лимитами CPU/RAM", $tags="multi_tenancy")
+Rel(onboarding_orchestrator, db_tenant_a, "4.2 Разворачивает БД с лимитом дискового пространства", $tags="multi_tenancy")
+Rel(onboarding_orchestrator, kafka_broker, "4.3 Настраивает изолированные топики с ограничением хранения логов", $tags="multi_tenancy")
+
+Rel(onboarding_orchestrator, api_gateway, "5. Прописывает правила Rate Limit и максимальный размер Payload для тенанта")
+
+' В бою
+Rel(partner_admin, api_gateway, "6. Вызов API с JWT-токеном (Внутри зашит Tenant_ID)")
+Rel(api_gateway, core_services, "7. Пропускает запрос, если лимиты партнера не превышены")
+Rel(core_services, db_tenant_a, "8. Запись данных строго в базу нужного тенанта")
+
+' Мониторинг и Анализ
+Rel(api_gateway, monitoring_system, "9. Отдает метрики с ярлыком [tenant_id]")
+Rel(monitoring_system, grafana, "10. Строит раздельные графики утилизации")
+Rel(platform_operator, grafana, "11. Контролирует соблюдение квот, урезает лимиты нарушителям или выставляет счета (FinOps)")
+
+@enduml
