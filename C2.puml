@@ -1,5 +1,5 @@
 @startuml Container_Diagram_Full_Infrastructure
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+!include <C4/C4_Container>
 
 Person(passenger, "Пассажир", "Заказывает поездки")
 Person(driver, "Водитель", "Принимает заказы и получает выплаты")

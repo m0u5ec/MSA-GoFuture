@@ -1,0 +1,51 @@
+@startuml Container_Diagram_Global_Deployment
+!include <C4/C4_Container>
+
+' Настраиваем стили: пройденный этап (зеленый), новые глобальные элементы защиты и отказоустойчивости (красный)
+UpdateElementStyle("to_be", $bgColor="lightgreen", $fontColor="black", $borderColor="green")
+AddElementTag("global_security", $bgColor="#FF4D4D", $fontColor="white", $borderColor="#B30000")
+
+System_Ext(users_group, "Группы пользователей в регионах (ЮВА, Южная Америка, ЛатАм)")
+Container(user_interfaces, "Интерфейсы пользователей (UI)", "Mobile Apps / Web SPAs")
+
+System_Boundary(global_network_boundary, "Глобальный сетевой контур GoFuture") {
+
+    ' ### КРАСНЫЕ КОМПОНЕНТЫ: ГЕОМАРШРУТИЗАЦИЯ И ЗАЩИТА ###
+    Container(geo_dns, "Global Traffic Manager / GeoDNS", "Anycast Route 53 / Yandex Cloud DNS", "Маршрутизирует пользователя на ближайший региональный дата-центр по задержкам (Latency-based routing)", $tags="global_security")
+    Container(waf_edge, "Web Application Firewall (WAF) & DDoS Protection", "Cloudflare / Qrator / Yandex Cloud Advanced", "Фильтрация L7 атак, защита от ботов, гео-блокировка", $tags="global_security")
+    Container(ngfw_firewall, "Next-Generation Firewall (NGFW)", "Изоляция периметра", "Контроль трафика, IPS/IDS, защита межсервисных VPN-туннелей между регионами", $tags="global_security")
+
+    ' ### ЕДИНАЯ ТОЧКА ВХОДА РЕГИОНА ###
+    Container(api_gateway, "API Gateway & ACL Layer", "Envoy/NGINX", "Входная точка региона. Маршрутизация, Rate Limiting, OpenTelemetry", $tags="to_be")
+
+    System_Boundary(region_cluster, "Региональный кластер (Доступен в 3+ ДЦ)") {
+        Container(core_services, "Изолированные микросервисы", "Booking, Driver, IAM etc", "Контекст локального региона", $tags="to_be")
+        ContainerDb(db_regional, "Региональные БД компонентов", "PostgreSQL Cluster", "Локальные транзакции, профили и история поездок региона")
+        ContainerQueue(kafka_broker, "Событийная шина (Apache Kafka)", "Партиционирование по регионам", "Локальный обмен событиями", $tags="to_be")
+    }
+
+    ' ### КРАСНЫЙ КОМПОНЕНТ: МЕЖРЕГИОНАЛЬНАЯ РЕПЛИКАЦИЯ ###
+    Container(db_replicator, "Cross-Region Replicator", "MirrorMaker 2 / PgPool-II / Bi-directional Replication", "Обеспечивает трансграничную асинхронную репликацию критических данных", $tags="global_security")
+}
+
+' ### СВЯЗИ ТРАФИКА И ЗАЩИТЫ ###
+Rel(users_group, user_interfaces, "Используют приложения")
+
+' Поток через гео-инфраструктуру
+Rel(user_interfaces, geo_dns, "1. Запрашивают IP балансировщика")
+Rel(geo_dns, user_interfaces, "2. Возвращает IP ближайшего ДЦ")
+Rel(user_interfaces, waf_edge, "3. Отправляют HTTPS запросы", "TLS 1.3")
+Rel(waf_edge, ngfw_firewall, "4. Очищенный трафик")
+Rel(ngfw_firewall, api_gateway, "5. Проброс на шлюз региона")
+
+' Внутренний контур региона
+Rel(api_gateway, core_services, "Маршрутизация gRPC/REST")
+Rel(core_services, db_regional, "SQL")
+Rel(core_services, kafka_broker, "Events")
+
+' Трансграничная репликация между регионами сквозь Firewall
+Rel(kafka_broker, db_replicator, "Стриминг событий глобального IAM и аналитики")
+Rel(db_regional, db_replicator, "Синхронизация глобальных таблиц")
+Rel(db_replicator, ngfw_firewall, "Транспорт сквозь защищенный межрегиональный VPN-туннель")
+
+@enduml

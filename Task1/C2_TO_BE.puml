@@ -1,0 +1,199 @@
+@startuml Container_Diagram_ToBe_Fixed
+!include <C4/C4_Container>
+
+UpdateElementStyle("to_be", $bgColor="lightgreen", $fontColor="grey", $borderColor="green")
+
+Person(passenger, "Пассажир", "Заказывает поездки")
+Person(driver, "Водитель", "Принимает заказы и получает выплаты")
+Person(manager, "Корпоративный менеджер", "Управляет счетами")
+Person(accountant, "Бухгалтер", "Контролирует выплаты")
+Person(dev_engineer, "Разработчик", "Разрабатывает новые функции")
+Person(sre_engineer, "SRE инженер", "Мониторит и поддерживает систему")
+
+System_Boundary(go_future_system, "GoFuture Platform (Target Architecture)") {
+    ' ### КЛИЕНТСКИЕ ПРИЛОЖЕНИЯ ###
+    Container(web_passenger, "Пассажирское приложение", "iOS/Android/Huawei", "Интерфейс для пассажиров")
+    Container(web_driver, "Водительское приложение", "iOS/Android/Huawei", "Интерфейс для водителей")
+    Container(web_portal, "Корпоративный веб-портал", "Web Application", "Управление заказами")
+    Container(admin_portal, "Админ-панель", "Web Application", "Управление выплатами")
+
+    ' ### СЛОЙ МАРШРУТИЗАЦИИ И СОВМЕСТИМОСТИ ###
+    Container(api_gateway, "API Gateway & ACL" , "Envoy / NGINX", "Точка входа, Rate Limiting, проксирование старых запросов, маршрутизация новых", $tags="to_be")
+
+
+    ' ### ЦЕНТРАЛЬНЫЙ IAM ###
+    Container(srv_iam, "User Management & IAM", "Go / Python", "Аутентификация, сессии, роли, JWT", $tags="to_be")
+    ContainerDb(db_iam, "БД IAM", "PostgreSQL", "Данные аккаунтов пользователей", $tags="to_be")
+
+    ' ### НОВЫЕ ВЫДЕЛЕННЫЕ СЕРВИСЫ ###
+    Container(srv_booking, "Booking Service", "Go", "Жизненный цикл поездки, подбор водителя", $tags="to_be")
+    ContainerDb(db_booking, "БД Booking", "PostgreSQL", "Данные поездок и заказов", $tags="to_be")
+
+    Container(srv_driver, "Driver Service", "Python", "Профили, смены, умное распределение водителей", $tags="to_be")
+    ContainerDb(db_driver, "БД Driver", "PostgreSQL", "Данные водителей и ТС", $tags="to_be")
+
+    Container(srv_pricing, "Pricing Service", "Python", "Реалтайм расчет цен, ML-коэффициенты спроса", $tags="to_be")
+    ContainerDb(cache_pricing, "Кеш тарифов", "Redis", "Кеширование правил расчета", $tags="to_be")
+
+    Container(srv_geography, "Geography Service", "Go", "Реалтайм трекинг, расчет геозон, ETA", $tags="to_be")
+    ContainerDb(db_geo, "Поисковый индекс", "Elasticsearch", "Высокодинамичные геоданные", $tags="to_be")
+
+    Container(srv_payments, "Payments Service", "Go", "Списание средств, балансы ЮЛ", $tags="to_be")
+    ContainerDb(db_payments, "БД Payments", "PostgreSQL", "Финансовые транзакции пассажиров", $tags="to_be")
+
+    Container(srv_payouts, "Payouts Service", "Python", "Балансы водителей, интеграция с банками", $tags="to_be")
+    ContainerDb(db_payouts, "БД Payouts", "PostgreSQL", "Балансы водителей, история выплат", $tags="to_be")
+
+    Container(srv_fraud, "Fraud Service", "Python", "ML-скоринг транзакций и поездок", $tags="to_be")
+    Container(srv_notification, "Notification Service", "Go", "Шаблонизация и отправка уведомлений", $tags="to_be")
+
+    ' ### ОСТАТОЧНЫЙ ЛЕГАСИ-КОНТУР ###
+    Container(app_monolith, "GoFuture Monolith (Legacy)", "Django Application", "Остаточная бизнес-логика")
+    ContainerDb(db_main, "Основная БД (Legacy)", "PostgreSQL RDS", "Постепенно усыхающая легаси БД")
+    ContainerDb(db_cache, "In-memory кеш (Legacy)", "Redis", "Кеширование старого монолита")
+    ContainerDb(db_search, "Поисковый индекс (Legacy)", "Elasticsearch", "Устаревший геопоиск монолита")
+
+    ' ### ОЧЕРЕДИ И ОПЕРАЦИОННЫЕ ВОРКЕРЫ ###
+    ContainerQueue(mq_broker, "Брокер сообщений (RabbitMQ)", "RabbitMQ", "Используется ТОЛЬКО Celery. Пишет только монолит.")
+    Container(app_worker, "Воркеры фоновых задач", "Celery", "Обработка асинхронных задач легаси-монолита")
+
+    ' ### ЦЕНТРАЛЬНАЯ ШИНА ДОМЕННЫХ СОБЫТИЙ ###
+    ContainerQueue(kafka_broker, "Event Bus (Apache Kafka)", "Apache Kafka", "Шина для реалтайм обмена событиями и аналитики", $tags="to_be")
+
+    ' ### МОНИТОРИНГ И OBSERVABILITY ###
+    Container(monitoring, "Prometheus", "Monitoring System", "Сбор метрик со всей системы")
+    Container(grafana, "Grafana", "Dashboard System", "Визуализация метрик и дашборды")
+    Container(loki, "Loki", "Log Aggregation", "Сбор и анализ логов")
+    Container(alert_manager, "Alertmanager", "Alert System", "Управление алертами")
+
+    ' ### CI/CD ИНФРАСТРУКТУРА ###
+    Container(jenkins, "Jenkins", "CI/CD Server", "Сборка и деплой монолита и сервисов")
+    Container(artifact_repo, "Artifact Repository", "Docker Registry", "Хранение образов")
+    Container(ci_worker, "CI/CD Workers", "VM/Containers", "Задачи сборки и тестов")
+
+    ' ### АНАЛИТИЧЕСКАЯ ИНФРАСТРУКТУРА ###
+    Container(analytics_engine, "Analytics Engine", "Spark/Flink", "Обработка аналитических данных")
+    Container(analytics_db, "Analytics DB", "ClickHouse", "Хранение аналитических данных")
+    Container(datalens, "DataLens", "BI Tool", "Визуализация бизнес-метрик")
+}
+
+' ### ВНЕШНИЕ СИСТЕМЫ ###
+System_Ext(yandex_pay, "Яндекс Пэй", "Платёжный шлюз")
+System_Ext(yandex_maps, "Яндекс Карты", "Картографический сервис")
+System_Ext(fcm, "FCM", "Push-сервис Google")
+System_Ext(apns, "APNs", "Push-сервис Apple")
+System_Ext(huawei_push, "Huawei Push Kit", "Push-сервис Huawei")
+System_Ext(bank_api, "API Банка", "Банковские выплаты")
+
+' ### СВЯЗИ ПОЛЬЗОВАТЕЛЕЙ С UI ###
+Rel(passenger, web_passenger, "Использует")
+Rel(driver, web_driver, "Использует")
+Rel(manager, web_portal, "Использует")
+Rel(accountant, admin_portal, "Использует")
+Rel(dev_engineer, jenkins, "Запускает сборки")
+Rel(sre_engineer, grafana, "Мониторит систему")
+Rel(sre_engineer, alert_manager, "Настраивает алерты")
+
+' ### ТРАФИК ЧЕРЕЗ API GATEWAY / ACL ###
+Rel(web_passenger, api_gateway, "HTTP/REST API")
+Rel(web_driver, api_gateway, "HTTP/REST API")
+Rel(web_portal, api_gateway, "HTTP/REST API")
+Rel(admin_portal, api_gateway, "HTTP/REST API")
+
+Rel(api_gateway, app_monolith, "HTTP/REST", "Старый легаси трафик")
+Rel(api_gateway, srv_iam, "gRPC/REST", "Новый трафик пользователей")
+Rel(api_gateway, srv_booking, "gRPC/REST", "Новый трафик поездок")
+
+' ### АУТЕНТИФИКАЦИЯ (API GW -> IAM) ###
+Rel(api_gateway, srv_iam, "Проверяет/выпускает JWT", "gRPC")
+
+' ### ВЗАИМОДЕЙСТВИЕ МИКРОСЕРВИСОВ (СИНХРОННОЕ gRPC) ###
+Rel(srv_booking, srv_driver, "Запрос на назначение водителя", "gRPC")
+Rel(srv_booking, srv_pricing, "Запрос стоимости поездки", "gRPC")
+Rel(srv_booking, srv_geography, "Построение маршрута и ETA", "gRPC")
+Rel(srv_payouts, srv_driver, "Валидация профиля водителя", "gRPC")
+
+' ### АСИНХРОННОЕ ВЗАИМОДЕЙСТВИЕ И СОБЫТИЯ (KAFKA) ###
+Rel(srv_booking, kafka_broker, "Публикует: RideCreated, RideFinished", "Kafka Producer")
+Rel(srv_payments, kafka_broker, "Публикует: PaymentCaptured", "Kafka Producer")
+Rel(srv_driver, kafka_broker, "Публикует: DriverWentOnShift", "Kafka Producer")
+
+Rel(srv_fraud, kafka_broker, "Слушает события для ML-скоринга", "Kafka Consumer")
+Rel(srv_notification, kafka_broker, "Слушает события для триггера push", "Kafka Consumer")
+
+' ### РАБОТА С ЛЕГАСИ-ОЧЕРЕДЬЮ (RABBITMQ + CELERY) ###
+Rel(app_monolith, mq_broker, "Пишет фоновые задачи монолита", "AMQP")
+Rel(app_worker, mq_broker, "Читает легаси-задачи", "AMQP")
+
+' ### СВЯЗИ С ИЗОЛИРОВАННЫМИ БД И ХРАНИЛИЩАМИ ###
+Rel(srv_iam, db_iam, "Чтение/запись")
+Rel(srv_booking, db_booking, "Чтение/запись")
+Rel(srv_driver, db_driver, "Чтение/запись")
+Rel(srv_pricing, cache_pricing, "Redis API")
+Rel(srv_geography, db_geo, "Elasticsearch API")
+Rel(srv_payments, db_payments, "Чтение/запись")
+Rel(srv_payouts, db_payouts, "Чтение/запись")
+
+' ### ВЗАИМОДЕЙСТВИЕ СТАРЫХ КОМПОНЕНТОВ С БАЗАМИ ###
+Rel(app_monolith, db_main, "ORM")
+Rel(app_monolith, db_cache, "Redis API")
+Rel(app_monolith, db_search, "Elasticsearch API")
+Rel(app_worker, db_main, "ORM")
+
+' ### ВНЕШНИЕ ИНТЕГРАЦИИ МИКРОСЕРВИСОВ И ВОРКЕРОВ ###
+Rel(srv_payments, yandex_pay, "Обработка платежей", "REST API")
+Rel(srv_geography, yandex_maps, "Запросы геоданных", "REST API")
+Rel(srv_payouts, bank_api, "Инициирует выплаты", "REST API")
+
+Rel(app_worker, fcm, "Легаси push", "REST API")
+Rel(app_worker, apns, "Легаси push", "REST API")
+Rel(app_worker, huawei_push, "Легаси push", "REST API")
+Rel(app_worker, bank_api, "Легаси выплаты", "REST API")
+Rel(srv_notification, fcm, "Новый push", "REST API")
+Rel(srv_notification, apns, "Новый push", "REST API")
+Rel(srv_notification, huawei_push, "Новый push", "REST API")
+
+' ### ПОЛНЫЙ СКВОЗНОЙ МОНИТОРИНГ (PROMETHEUS МЕТРИКИ) ###
+Rel(monitoring, grafana, "Данные", "PromQL")
+Rel(monitoring, alert_manager, "Алерты", "Alert Rules")
+Rel(alert_manager, sre_engineer, "Уведомления")
+
+Rel(app_monolith, monitoring, "Метрики")
+Rel(app_worker, monitoring, "Метрики")
+Rel(db_main, monitoring, "PostgreSQL Exporter")
+Rel(mq_broker, monitoring, "RabbitMQ Exporter")
+Rel(kafka_broker, monitoring, "Kafka Exporter")
+
+Rel(srv_iam, monitoring, "Метрики")
+Rel(srv_booking, monitoring, "Метрики")
+Rel(srv_driver, monitoring, "Метрики")
+Rel(srv_geography, monitoring, "Метрики")
+Rel(srv_payments, monitoring, "Метрики")
+Rel(srv_payouts, monitoring, "Метрики")
+
+' ### ПОЛНОЕ СКВОЗНОЙ СБОР ЛОГОВ (LOKI) ###
+Rel(app_monolith, loki, "Логи")
+Rel(app_worker, loki, "Логи")
+Rel(srv_iam, loki, "Логи")
+Rel(srv_booking, loki, "Логи")
+Rel(srv_driver, loki, "Логи")
+Rel(srv_geography, loki, "Логи")
+Rel(srv_payments, loki, "Логи")
+Rel(srv_payouts, loki, "Логи")
+
+' ### CI/CD ПАЙПЛАЙН ДЛЯ ВСЕХ КОМПОНЕНТОВ ###
+Rel(jenkins, ci_worker, "Запускает пайплайны")
+Rel(ci_worker, artifact_repo, "Push образов")
+Rel(jenkins, artifact_repo, "Pull образов")
+Rel(ci_worker, app_monolith, "Тесты")
+Rel(ci_worker, srv_booking, "Тесты микросервисов")
+
+' ### АНАЛИТИЧЕСКАЯ ИНФРАСТРУКТУРА (ПОЛУЧАЕТ ДАННЫЕ ИЗ KAFKA) ###
+Rel(app_monolith, analytics_engine, "Легаси события", "AMQP")
+Rel(kafka_broker, analytics_engine, "Новый поток доменных событий", "Kafka Consumer")
+Rel(analytics_engine, analytics_db, "Запись данных", "ETL Process")
+Rel(analytics_db, datalens, "Предоставляет данные")
+Rel(datalens, manager, "Отчёты")
+Rel(datalens, accountant, "Отчёты")
+
+@enduml

@@ -1,5 +1,5 @@
 @startuml Context_Diagram_With_Payouts
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+!include <C4/C4_Context>
 
 Person(passenger, "Пассажир", "Заказывает, отслеживает и оплачивает поездки")
 Person(driver, "Водитель", "Принимает заказы, управляет поездками\nи получает выплаты") 
